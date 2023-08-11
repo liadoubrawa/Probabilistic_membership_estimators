@@ -338,7 +338,7 @@ def hbdscan_run(data, cluster, dz, radius, N_runs, gradient, intercept, cluster_
     Prob += [gal_num2.count(l)/N_runs]
 
   # Save probability into the data
-  data_cut_control['member_hdbsdcan'] = Prob
+  data_cut_control['Prob'] = Prob
   data['clusterID'][list(data_cut_control['l_id'])] = cluster['ID']
   data['Prob'][list(data_cut_control['l_id'])] = Prob
 
@@ -720,9 +720,9 @@ def func(x, a, b, c, d, e):
 # return: interpolation result (popt_mode, popt_err)
 '''
 
-def survey_area_statistics(radius_att, data, stats, do_plot=1):
+def survey_area_statistics(radius_att, data, redshift_range, stats, do_plot=1):
   # redshift range
-  z = arange(.04,.5,.05)
+  z = redshift_range
 
   # array
   mode = []
@@ -1257,7 +1257,119 @@ def save_data(cluster_catalog):
 
   return
 
+"""# example run: obtaining galaxies probabilities
+
+## load data
+"""
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+# to run the code one will need at least
+# galaxies ra, dec, z, and PDF (photo-z PDFs)
+# clusters ra, dec, z
+path = '/content/drive/MyDrive/'
+data = Table.read('%s/data.fits'%path, format='fits')
+
+maxra, minra = max(data_cut['ra']), min(data_cut['ra'])
+maxdec, mindec = max(data_cut['dec']), min(data_cut['dec'])
+
+# redshift array on which PDFs were estimated
+zs = arange(0., .602, 0.002)
+
+path = '/content/drive/MyDrive/pesquisa/splus/mock/mock_april2021/'
+
+catalog_name = 'cluster_catalog'
+cluster_catalog = Table.read('%s/%s_101_0.fits'%(path,catalog_name), format='fits')
+print(cluster_catalog.columns)
+detcl_mock_cut = cluster_catalog
+data = Table.read('%s/data_%s_101_0.fits'%(path,catalog_name), format='fits')
+print(data.columns)
+
+# redshift array on which PDFs were estimated
+zs = arange(0., .602, 0.002)
+
+"""## step 1: define the deepness of the catalogue
+
+Apply an absolute magnitude cut, if necessary
+"""
+
+# creates a magnitude cut condition
+cond =  data['M']< -20.25
+data2 = data[cond]
+
+# redshift range of study
+redshift_range = arange(.04,.45,.05)
+
+# calculate the field contribution
+popt_mode, popt_err = survey_area_statistics(500, data2, redshift_range, 'stats')
+print(popt_mode, popt_err)
+
+"""## step 2: initiate the variables to save the outputs"""
+
+# data new columns for running the code
+data2['l_id'] =  arange(len(data2))      # internal parameter
+data2['ID']   =  data2['galaxyId']       # Galaxy ID, use "arange(len(data2))" if none
+data2['Prob'] =  [99.9]*len(data2)       # Galaxy membership probability
+data2['clusterID'] =  [99.9]*len(data2)  # Corresponding cluster ID
+
+# cluster catalog columns for running the code
+cluster_catalog['ID'] = arange(len(cluster_catalog))
+
+"""## step 3: run the algorithm"""
+
+# init = reestart point if needed (default=0)
+init = 0
+
+# run the algorithm over all the cluster catalog range
+for i in tqdm.tqdm(range(init, len(cluster_catalog))):
+
+  # cut galaxy data
+  deltaz = 0.05
+  outer_radius = 1500 #kpc
+  data_cut = select_galaxies_data(data2, cluster_catalog[i], outer_radius, deltaz)
+
+  maxra, minra = max(data_cut['ra']), min(data_cut['ra'])
+  maxdec, mindec = max(data_cut['dec']), min(data_cut['dec'])
+
+  # Define the cluster radius
+  radius = 500 # kpc
+
+  # FAE --------
+  deltaz = 0.05
+  rich, err, snr = richness_rv(data2, cluster_catalog[i], deltaz, radius, popt_mode, popt_err)
+
+  # AME -------
+  out_data = hbdscan_run(data2, cluster_catalog[i], 0.05, radius, 50, 0.5292105368716316, 0.026652401872489406, rich)
+
+'''
+# "popt_mode, popt_err" are the field density calculated above
+
+# 0.5292105368716316, 0.026652401872489406 represents the linear fitting that describes
+# the best agreement between SPLUS mock true members and the one obtained from FAE
+# used to calculate minimun number of neighbours for HDBSCAN
+
+"no galaxies within Rc" indicates that with the given absolute magnitude limit
+there is no galaxy within the characteristic radius -- happens depending on the
+survey completeness.
+'''
+
+i = 0
+plt.plot(cluster_catalog['ra'][i], cluster_catalog['dec'][i], 'x', label='Cluster center')
+cond_cluster = (data['clusterID'] == cluster_catalog['ID'][i]) & (data['Prob']>0)
+plt.plot(data['RA'][cond_cluster], data['DEC'][cond_cluster], '.', ms = 3, label='Cluster members')
+plt.xlabel('RA')
+plt.ylabel('DEC')
+plt.legend()
+plt.show()
+
+plt.hist(data['Prob'][cond_cluster], bins=20)
+plt.title('Membership probabilities')
+plt.show()
+
 """# Example run -- compact dataset
+
+Probabilities + richness and optical luminosities from run function
 
 ## load data
 """
@@ -1456,11 +1568,10 @@ plt.show()
 
 # plotting detections with hdbscan only highlighting mock true members
 
-cluster_catalog2 = cluster_catalog[cluster_catalog['R_ame_mock']>15]
 
-for i in range(len(cluster_catalog2)):
+for i in range(len(cluster_catalog)):
   # hbdscan_run(data, cluster, dz, radius, N_runs, gradient, intercept, cluster_rich,
   #              is_mock=0, do_plot=0):
-  out_data = hbdscan_run(data, cluster_catalog2[i], 0.05, cluster_catalog2['Rc'][i],
-                          1, 0.5292105368716316, 0.026652401872489406, cluster_catalog2['R_fae'][i],
+  out_data = hbdscan_run(data, cluster_catalog[i], 0.05, cluster_catalog['Rc'][i],
+                          1, 0.5292105368716316, 0.026652401872489406, cluster_catalog['R_fae'][i],
                           is_mock=1, do_plot=1)
